@@ -1,0 +1,43 @@
+{
+  "enabled": {
+    "type": "bool",
+    "description": "是否启用 Hindsight 长期记忆",
+    "default": true
+  },
+  "debug": {
+    "type": "bool",
+    "description": "开启后每次请求会打日志（便于排查：是否触发、是否成功写入/召回）",
+    "default": false
+  },
+  "base_url": {
+    "type": "string",
+    "description": "Hindsight 服务 API 的 base_url，例如 http://localhost:8888",
+    "default": "http://localhost:8888"
+  },
+  "timeout": {
+    "type": "float",
+    "description": "调用 Hindsight API 的超时时间（秒）",
+    "default": 30
+  },
+  "recall_budget": {
+    "type": "string",
+    "description": "recall 检索深度：low / mid / high",
+    "options": ["low", "mid", "high"],
+    "default": "mid"
+  },
+  "recall_max_tokens": {
+    "type": "int",
+    "description": "单次 recall 返回内容的最大 token 上限",
+    "default": 2048
+  },
+  "memory_system_prompt": {
+    "type": "text",
+    "description": "注入到对话中的长期记忆说明，{memory} 会被替换为召回的记忆内容",
+    "default": "以下是与当前对话相关的长期记忆，供你参考：\n\n{memory}\n\n请结合上述记忆自然地进行回复。"
+  },
+  "retain_context": {
+    "type": "string",
+    "description": "retain 时传入的 context 字段，用于标记来源",
+    "default": "astrbot_chat"
+  }
+}

@@ -1,0 +1,8 @@
+name: hindsight_memory
+display_name: Hindsight 长期记忆
+description: 基于 Hindsight 的 Agent 长期记忆插件，在发送给大模型前自动存入记忆并召回长期记忆注入到多轮对话中。
+version: "0.1.0"
+author: AstrBot Community
+repository: ""  # 从链接安装时填本插件仓库 URL，如 https://github.com/xxx/astrbot_plugin_hindsight_memory
+support_platforms: []
+astrbot_version: ">=4.16,<5"
