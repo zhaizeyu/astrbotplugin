@@ -68,53 +68,6 @@ def _build_retain_content(req: ProviderRequest) -> str:
     return "\n".join(parts).strip() if parts else ""
 
 
-def _ensure_function_parameters_schema(tool: Any) -> bool:
-    """兼容 OpenAI 新校验：function.parameters 为 object 时必须包含 properties。"""
-    if not isinstance(tool, dict):
-        return False
-    fn = tool.get("function")
-    if not isinstance(fn, dict):
-        return False
-    params = fn.get("parameters")
-    if not isinstance(params, dict):
-        return False
-    if params.get("type") != "object":
-        return False
-    if "properties" in params and isinstance(params.get("properties"), dict):
-        return False
-    params["properties"] = {}
-    return True
-
-
-def _sanitize_tool_schemas(req: ProviderRequest) -> int:
-    """修正不兼容的工具参数 schema，避免 OpenAI 400 invalid_function_parameters。"""
-    fixed = 0
-
-    tools = getattr(req, "tools", None)
-    if isinstance(tools, list):
-        for tool in tools:
-            if _ensure_function_parameters_schema(tool):
-                fixed += 1
-
-    # 某些版本可能使用 function / functions 字段，做兜底兼容
-    functions = getattr(req, "functions", None)
-    if isinstance(functions, list):
-        for fn in functions:
-            if not isinstance(fn, dict):
-                continue
-            params = fn.get("parameters")
-            if not isinstance(params, dict):
-                continue
-            if params.get("type") != "object":
-                continue
-            if "properties" in params and isinstance(params.get("properties"), dict):
-                continue
-            params["properties"] = {}
-            fixed += 1
-
-    return fixed
-
-
 @register(
     "hindsight_memory",
     "AstrBot Hindsight",
@@ -228,9 +181,6 @@ class HindsightMemoryPlugin(Star):
         """在 LLM 请求前：存入本轮内容、召回长期记忆并注入到 req.contexts。"""
         if not self._enabled or Hindsight is None:
             return
-        fixed_count = _sanitize_tool_schemas(req)
-        if self._debug and fixed_count:
-            logger.info("hindsight_memory: 已修正 %d 个工具 schema（补全 parameters.properties）", fixed_count)
         bank_id = event.unified_msg_origin
         if self._debug:
             logger.info("hindsight_memory: on_req_llm 触发 bank_id=%s", bank_id)
