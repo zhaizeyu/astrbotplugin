@@ -28,8 +28,17 @@
 | 召回最大 token 数 | 单次 recall 返回长度上限 | 2048 |
 | 长期记忆系统提示词 | 注入模板，`{memory}` 会被替换为召回内容 | 见配置页 |
 | 存入记忆时的上下文标签 | retain 的 context 字段 | astrbot_chat |
+| 图片长期记忆 | 是否将对话中的图片通过 Hindsight files/retain 写入记忆（仅内联 base64 图） | 是 |
+| 图片解析器 | 图片 retain 使用的解析器（如 iris、default），留空用服务端默认 | 空 |
+| 参与 retain 的消息条数 | 文本与图片共用的最近消息条数 | 6 |
 
 **注意**：若 AstrBot 运行在 Docker 内、Hindsight 在宿主机，API 地址需填宿主机 IP（如 `http://172.17.0.1:8888`），不能填 `localhost`。
+
+### 图片长期记忆
+
+- 开启「图片长期记忆」后，插件会从最近 N 条消息中提取**内联图片**（`data:image/...;base64,...` 或 Gemini `inlineData`），并调用 Hindsight 的 **files/retain** 上传。Hindsight 会对图片做 OCR/视觉抽取，结果作为记忆参与后续 recall。
+- 仅处理内联 base64 图片，**不拉取远程 URL**，避免超时与隐私问题。
+- 需 Hindsight 服务端支持 files/retain 接口；若客户端版本无 `retain_file`，图片记忆会静默跳过，仅保留文本侧「附有一张图片」的标记。
 
 ## 调试与日志
 

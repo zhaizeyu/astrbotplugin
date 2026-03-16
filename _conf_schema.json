@@ -39,5 +39,20 @@
     "type": "string",
     "description": "retain 时传入的 context 字段，用于标记来源",
     "default": "astrbot_chat"
+  },
+  "retain_images": {
+    "type": "bool",
+    "description": "是否将对话中的图片通过 Hindsight 的 files/retain 写入长期记忆（需服务端支持；仅处理内联 base64 图片）",
+    "default": true
+  },
+  "image_parser": {
+    "type": "string",
+    "description": "图片 retain 时使用的解析器（如 iris、default），留空使用服务端默认",
+    "default": ""
+  },
+  "retain_context_window": {
+    "type": "int",
+    "description": "参与 retain 的最近消息条数（文本与图片共用）",
+    "default": 6
   }
 }

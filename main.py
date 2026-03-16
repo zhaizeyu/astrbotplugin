@@ -23,6 +23,18 @@ try:
 except ImportError:
     Hindsight = None  # type: ignore[misc, assignment]
 
+try:
+    from forget_previous_images import forget_previous_images_in_contexts, _content_has_image as _content_has_image_fn
+except ImportError:
+    forget_previous_images_in_contexts = None
+    _content_has_image_fn = None
+
+try:
+    from image_retain import extract_image_payloads_from_contexts, retain_images_async
+except ImportError:
+    extract_image_payloads_from_contexts = None  # type: ignore[misc, assignment]
+    retain_images_async = None  # type: ignore[misc, assignment]
+
 
 def _get_text_from_content(content: Any) -> str:
     """从单条消息的 content 中提取纯文本（兼容多模态）。"""
@@ -49,20 +61,32 @@ def _recall_item_text(r: Any) -> str:
     return getattr(r, "text", str(r)).strip() if r else ""
 
 
-def _build_retain_content(req: ProviderRequest) -> str:
-    """从当前请求中构建要存入记忆的文本（本轮用户输入 + 最近一轮对话摘要）。"""
+def _content_has_image(content: Any) -> bool:
+    """判断消息 content 是否包含图片（用于在长期记忆中保留「发过图」的痕迹）。"""
+    if _content_has_image_fn is not None:
+        return _content_has_image_fn(content)
+    return False
+
+
+def _build_retain_content(req: ProviderRequest, max_messages: int = 6) -> str:
+    """从当前请求中构建要存入记忆的文本（本轮用户输入 + 最近 max_messages 轮对话）；含图消息会保留「附有图片」以便召回。"""
     parts = []
-    # 最近几轮 user/assistant 的文本，便于 Hindsight 提取实体与关系
     if req.contexts:
-        for ctx in req.contexts[-6:]:  # 最多取最近 3 轮
+        for ctx in req.contexts[-max_messages:]:
             role = (ctx.get("role") or "").strip().lower()
-            content = _get_text_from_content(ctx.get("content"))
-            if not content:
-                continue
+            raw_content = ctx.get("content")
+            content = _get_text_from_content(raw_content)
+            has_image = _content_has_image(raw_content)
             if role == "user":
-                parts.append(f"用户: {content}")
+                if content:
+                    parts.append(f"用户: {content}" + (" [附有一张图片]" if has_image else ""))
+                elif has_image:
+                    parts.append("用户: 发送了一张图片")
             elif role == "assistant":
-                parts.append(f"助手: {content}")
+                if content:
+                    parts.append(f"助手: {content}" + (" [附有图片]" if has_image else ""))
+                elif has_image:
+                    parts.append("助手: 回复中包含图片")
     if req.prompt and isinstance(req.prompt, str) and req.prompt.strip():
         parts.append(f"用户: {req.prompt.strip()}")
     return "\n".join(parts).strip() if parts else ""
@@ -93,6 +117,11 @@ class HindsightMemoryPlugin(Star):
             "以下是与当前对话相关的长期记忆，供你参考：\n\n{memory}\n\n请结合上述记忆自然地进行回复。"
         )
         self._retain_context = self._config.get("retain_context") or "astrbot_chat"
+        self._retain_images = bool(self._config.get("retain_images", True))
+        self._image_parser = (self._config.get("image_parser") or "").strip() or None
+        self._retain_context_window = int(self._config.get("retain_context_window", 6))
+        if self._retain_context_window < 1:
+            self._retain_context_window = 6
         self._debug = bool(self._config.get("debug", False))
         if Hindsight is None:
             logger.warning("hindsight_memory: 未安装 hindsight-client，插件将不执行记忆逻辑。请 pip install hindsight-client")
@@ -178,15 +207,15 @@ class HindsightMemoryPlugin(Star):
 
     @filter.on_llm_request(priority=100)
     async def on_req_llm(self, event: AstrMessageEvent, req: ProviderRequest) -> None:
-        """在 LLM 请求前：存入本轮内容、召回长期记忆并注入到 req.contexts。"""
+        """在 LLM 请求前：先按完整上下文 retain/recall 并注入长期记忆（含「附有图片」），再对历史消息做「忘记图片」省 token。"""
         if not self._enabled or Hindsight is None:
             return
         bank_id = event.unified_msg_origin
         if self._debug:
             logger.info("hindsight_memory: on_req_llm 触发 bank_id=%s", bank_id)
 
-        # 1) 构建本轮内容并 retain
-        retain_content = _build_retain_content(req)
+        # 1) 构建本轮内容并 retain（与图片共用同一上下文窗口）
+        retain_content = _build_retain_content(req, max_messages=self._retain_context_window)
         if retain_content:
             if self._debug:
                 _log_trunc = retain_content[:200] + "..." if len(retain_content) > 200 else retain_content
@@ -199,6 +228,31 @@ class HindsightMemoryPlugin(Star):
             await self._retain(bank_id, retain_content)
             if self._debug:
                 logger.info("hindsight_memory: retain 已调用完成 bank_id=%s", bank_id)
+
+        # 1b) 图片长期记忆：从最近 N 条消息中提取内联图片，通过 Hindsight retain_file 写入（OCR/视觉抽取后参与 recall）
+        if (
+            self._retain_images
+            and req.contexts
+            and extract_image_payloads_from_contexts is not None
+            and retain_images_async is not None
+        ):
+            payloads = extract_image_payloads_from_contexts(req.contexts, max_messages=self._retain_context_window)
+            if payloads:
+                client = self._get_client()
+                if client is not None:
+                    try:
+                        n = await retain_images_async(
+                            client,
+                            bank_id,
+                            payloads,
+                            context=self._retain_context,
+                            parser=self._image_parser,
+                        )
+                        if n and self._debug:
+                            logger.info("hindsight_memory: 图片 retain 完成 bank_id=%s 数量=%d", bank_id, n)
+                    except Exception as e:
+                        if self._debug:
+                            logger.warning("hindsight_memory: 图片 retain 失败 bank_id=%s: %s", bank_id, e)
 
         # 2) 用当前用户问题做 recall
         query = req.prompt if isinstance(req.prompt, str) else ""
@@ -223,11 +277,15 @@ class HindsightMemoryPlugin(Star):
                 _preview.replace("\n", " "),
             )
         if not recalled:
+            if forget_previous_images_in_contexts is not None:
+                forget_previous_images_in_contexts(req, keep_last_user_image=True)
             return
 
         # 3) 将长期记忆注入为一条 system 消息，插入到 contexts 最前（或第一条 system 之后）
         memory_text = "\n".join(recalled).strip()
         if not memory_text:
+            if forget_previous_images_in_contexts is not None:
+                forget_previous_images_in_contexts(req, keep_last_user_image=True)
             return
         # 使用 replace 避免用户模板中含其他 { } 时 format 报 KeyError
         system_content = self._memory_system_prompt.replace("{memory}", memory_text)
@@ -245,6 +303,10 @@ class HindsightMemoryPlugin(Star):
                 break
         if not inserted:
             req.contexts.insert(0, inject_msg)
+
+        # 4) 最后再「忘记之前的图片」：历史消息中的图片替换为占位符，仅保留当前轮图片，省 token 且长期记忆已保留「附有图片」
+        if forget_previous_images_in_contexts is not None:
+            forget_previous_images_in_contexts(req, keep_last_user_image=True)
 
     async def terminate(self) -> None:
         """插件卸载时关闭客户端。"""

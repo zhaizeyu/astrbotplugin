@@ -47,6 +47,9 @@
 | recall_max_tokens | integer | 2048 | 单次 recall 返回内容的最大 token 数 |
 | memory_system_prompt | string | 见下 | 注入长期记忆时的 system 内容模板，必须包含 `{memory}` |
 | retain_context | string | "astrbot_chat" | retain 时传给 Hindsight 的 context 字段 |
+| retain_images | boolean | true | 是否将对话中的图片通过 Hindsight files/retain 写入长期记忆（仅内联 base64） |
+| image_parser | string | "" | 图片 retain 使用的解析器（如 iris、default），留空使用服务端默认 |
+| retain_context_window | integer | 6 | 参与 retain 的最近消息条数（文本与图片共用） |
 
 **memory_system_prompt 默认值：**
 
@@ -79,9 +82,16 @@
   - `content`：由 `_build_retain_content(req)` 生成（详见 [data-structures.md](./data-structures.md)）。
   - `context`：配置项 `retain_context`。
   - `timestamp`：当前 UTC 时间。
-- **执行**：在异步上下文中通过 `asyncio.to_thread(client.retain, ...)` 调用，避免阻塞事件循环。
+- **执行**：优先 `client.aretain`，否则 `asyncio.to_thread(client.retain, ...)`。
 
-### 3.3 recall（召回记忆）
+### 3.3 图片长期记忆（retain_file）
+
+- **条件**：配置项 `retain_images` 为 true，且 Hindsight 客户端支持 `retain_file` / `aretain_file`。
+- **数据来源**：从 `req.contexts` 最近 `retain_context_window` 条消息中提取内联图片（`image_url` 的 data URL 或 `inlineData` 的 base64），不拉取远程 http(s) URL。
+- **调用**：`client.retain_file(bank_id=..., file=...)` 或 `await client.aretain_file(...)`；服务端对图片做 OCR/视觉抽取后写入记忆，与文本记忆一起参与 recall。
+- **配置**：`image_parser` 可指定解析器（如 `iris`、`default`），留空使用服务端默认。
+
+### 3.4 recall（召回记忆）
 
 - **用途**：根据当前用户问题检索相关长期记忆。
 - **调用**：`client.recall(bank_id, query, budget=..., max_tokens=...)`
